@@ -1,11 +1,10 @@
 FROM python:3.11-slim
 
-# Install FFmpeg (required for audio streaming)
+# Install FFmpeg for audio streaming
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
