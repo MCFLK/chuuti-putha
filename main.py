@@ -29,8 +29,9 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix=".", intents=intents)
 
 WELCOME_CHANNEL_ID = 1549272703750377472
-# Using the public Cobalt API to save container memory
-COBALT_API_URL = "https://api.cobalt.tools" 
+
+# ⚠️ REPLACE THIS with your own self-hosted Cobalt URL
+COBALT_API_URL = "https://your-cobalt-instance.onrender.com"
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -56,7 +57,7 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ You are missing a required argument. Usage: `.play <YouTube URL>`")
+        await ctx.send("❌ Usage: `.play <YouTube URL>`")
     else:
         await ctx.send(f"❌ An error occurred: `{str(error)}`")
         print(f"Command error: {error}")
@@ -91,7 +92,7 @@ async def on_member_join(member: discord.Member):
 # --- Music Commands ---
 
 async def get_audio_stream_from_cobalt(video_url: str) -> str:
-    """Send a request to the public Cobalt API to get a streamable audio URL."""
+    """Send a request to the self-hosted Cobalt API to get a streamable audio URL."""
     payload = {
         "url": video_url,
         "downloadMode": "audio",
@@ -106,12 +107,11 @@ async def get_audio_stream_from_cobalt(video_url: str) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.post(f"{COBALT_API_URL}/", json=payload, headers=headers) as resp:
             if resp.status != 200:
-                raise Exception(f"Cobalt API responded with status {resp.status}")
+                error_text = await resp.text()
+                raise Exception(f"Cobalt API responded with status {resp.status}: {error_text}")
             data = await resp.json()
             
-            if data.get("status") == "redirect":
-                return data["url"]
-            elif data.get("status") == "tunnel":
+            if data.get("status") in ("redirect", "tunnel"):
                 return data["url"]
             else:
                 error_msg = data.get("error", {}).get("code", "Unknown error")
@@ -127,12 +127,11 @@ async def play(ctx, *, query: str):
 
     try:
         if ctx.voice_client is None:
-            # Increased timeout to 60 seconds to help with Koyeb's UDP issues
             await voice_channel.connect(timeout=60.0, reconnect=True)
         elif ctx.voice_client.channel != voice_channel:
             await ctx.voice_client.move_to(voice_channel)
     except asyncio.TimeoutError:
-        await ctx.send("❌ Failed to connect to the voice channel. This is usually a network issue with the hosting provider (UDP blocked).")
+        await ctx.send("❌ Failed to connect to voice. This is a UDP network issue with the hosting provider.")
         return
 
     async with ctx.typing():
@@ -156,14 +155,14 @@ async def play(ctx, *, query: str):
 
                 await ctx.send(f"🎵 Now playing: **{video_url}**")
             except Exception as e:
-                await ctx.send(f"❌ An error occurred while trying to play the audio: `{str(e)}`")
+                await ctx.send(f"❌ An error occurred: `{str(e)}`")
                 print(f"Error in play command: {e}")
 
 @bot.command(name="leave")
 async def leave(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("👋 Disconnected from voice channel.")
+        await ctx.send("👋 Disconnected.")
     else:
         await ctx.send("❌ I am not connected to a voice channel.")
 
