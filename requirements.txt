@@ -3,3 +3,4 @@ yt-dlp
 pynacl
 davey
 yukiapi
+aiohttp
