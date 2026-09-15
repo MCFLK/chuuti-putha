@@ -1,8 +1,26 @@
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
-import yt_dlp  # Fixed import syntax
+import yt_dlp
+
+# Dummy web server to satisfy Koyeb port 8000 health check
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_health_check_server():
+    server = HTTPServer(('0.0.0.0', 8000), HealthCheckHandler)
+    server.serve_forever()
+
+# Start health check server on a background thread
+threading.Thread(target=run_health_check_server, daemon=True).start()
+
+# ... rest of your main.py code below ...
 
 # Enable gateway intents
 intents = discord.Intents.default()
