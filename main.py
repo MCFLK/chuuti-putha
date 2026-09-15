@@ -4,7 +4,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
-import yt_dlp
+from yukiapi import YukiAPI
 
 # Dummy web server to satisfy Koyeb port health check
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -31,31 +31,10 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 
 WELCOME_CHANNEL_ID = 1549272703750377472
 
-# --- UPDATED YT-DLP CONFIGURATION ---
-YTDL_OPTIONS = {
-    'format': 'bestaudio/best',
-    'noplaylist': True,
-    'quiet': True,
-    'default_search': 'auto',
-    # Use cookies to bypass YouTube bot detection
-    'cookiefile': 'cookies.txt',
-    # Use Deno to solve JavaScript challenges
-    'js_runtime': 'deno',
-    # Mimic a mobile client to avoid web restrictions
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['android', 'web'],
-            'skip': ['webpage']
-        }
-    },
-}
-
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
-
-ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 def get_ordinal(n: int) -> str:
     formatted_num = f"{n:02d}"
@@ -68,8 +47,6 @@ def get_ordinal(n: int) -> str:
 @bot.event
 async def on_ready():
     print(f"⚡ Bot is online as {bot.user.name}")
-    if not os.path.exists('cookies.txt'):
-        print("⚠️ WARNING: cookies.txt not found! YouTube may block requests.")
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -101,7 +78,7 @@ async def on_member_join(member: discord.Member):
 # ----------------- MUSIC COMMANDS ----------------- #
 
 @bot.command(name="play")
-async def play(ctx, url: str):
+async def play(ctx, *, query: str):
     if not ctx.author.voice:
         await ctx.send("❌ You need to be in a Voice Channel to use this command!")
         return
@@ -115,22 +92,29 @@ async def play(ctx, url: str):
 
     async with ctx.typing():
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
-            
-            if 'entries' in data:
-                data = data['entries'][0]
+            async with YukiAPI() as yuki:
+                # Search for the track
+                results = await yuki.search(query, limit=1)
+                if not results:
+                    await ctx.send("❌ No results found for that query.")
+                    return
 
-            stream_url = data['url']
-            title = data.get('title', 'Audio Track')
+                track = results[0]
+                title = track.title
 
-            if ctx.voice_client.is_playing():
-                ctx.voice_client.stop()
+                # Get the direct streamable audio URL
+                stream_url = await yuki.get_stream(query, type="audio")
 
-            source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
-            ctx.voice_client.play(source, after=lambda e: print(f'Finished playing: {e}') if e else None)
+                if ctx.voice_client.is_playing():
+                    ctx.voice_client.stop()
 
-            await ctx.send(f"🎵 Now playing: **{title}**")
+                source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+                ctx.voice_client.play(
+                    source,
+                    after=lambda e: print(f'Finished playing: {e}') if e else None
+                )
+
+                await ctx.send(f"🎵 Now playing: **{title}**")
         except Exception as e:
             await ctx.send(f"❌ An error occurred while trying to play the audio: `{str(e)}`")
             print(f"Error in play command: {e}")
