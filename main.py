@@ -29,14 +29,14 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix=".", intents=intents)
 
 WELCOME_CHANNEL_ID = 1549272703750377472
-COBALT_API_URL = "http://localhost:9000"  # Cobalt runs in the same container
+# Using the public Cobalt API to save container memory
+COBALT_API_URL = "https://api.cobalt.tools" 
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
 
-# A simple lock to prevent concurrent processing
 processing_lock = asyncio.Lock()
 
 def get_ordinal(n: int) -> str:
@@ -50,6 +50,16 @@ def get_ordinal(n: int) -> str:
 @bot.event
 async def on_ready():
     print(f"⚡ Bot is online as {bot.user.name}")
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ You are missing a required argument. Usage: `.play <YouTube URL>`")
+    else:
+        await ctx.send(f"❌ An error occurred: `{str(error)}`")
+        print(f"Command error: {error}")
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -81,7 +91,7 @@ async def on_member_join(member: discord.Member):
 # --- Music Commands ---
 
 async def get_audio_stream_from_cobalt(video_url: str) -> str:
-    """Send a request to the local Cobalt API to get a streamable audio URL."""
+    """Send a request to the public Cobalt API to get a streamable audio URL."""
     payload = {
         "url": video_url,
         "downloadMode": "audio",
@@ -115,27 +125,24 @@ async def play(ctx, *, query: str):
 
     voice_channel = ctx.author.voice.channel
 
-    if ctx.voice_client is None:
-        await voice_channel.connect()
-    elif ctx.voice_client.channel != voice_channel:
-        await ctx.voice_client.move_to(voice_channel)
+    try:
+        if ctx.voice_client is None:
+            # Increased timeout to 60 seconds to help with Koyeb's UDP issues
+            await voice_channel.connect(timeout=60.0, reconnect=True)
+        elif ctx.voice_client.channel != voice_channel:
+            await ctx.voice_client.move_to(voice_channel)
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Failed to connect to the voice channel. This is usually a network issue with the hosting provider (UDP blocked).")
+        return
 
     async with ctx.typing():
-        async with processing_lock:  # Prevent concurrent Cobalt requests
+        async with processing_lock:
             try:
-                # If the query is not a URL, treat it as a YouTube search
                 if not query.startswith("http"):
-                    # Use a YouTube search URL
-                    search_query = query.replace(" ", "+")
-                    video_url = f"https://www.youtube.com/results?search_query={search_query}"
-                    # For a real search, you'd need to scrape the first result.
-                    # For simplicity, we'll just use the query as a URL if it's a link.
-                    # A more robust solution would use the YouTube Data API.
-                    await ctx.send("⚠️ Please provide a direct YouTube URL. Searching by text is not yet supported.")
+                    await ctx.send("⚠️ Please provide a direct YouTube URL. Searching by text is not supported.")
                     return
-                else:
-                    video_url = query
-
+                
+                video_url = query
                 stream_url = await get_audio_stream_from_cobalt(video_url)
 
                 if ctx.voice_client.is_playing():
