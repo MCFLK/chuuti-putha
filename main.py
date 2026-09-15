@@ -4,9 +4,9 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
-from yukiapi import YukiAPI
+import aiohttp
 
-# Dummy web server to satisfy Koyeb port health check
+# --- Health Check Server (for Koyeb) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -18,10 +18,9 @@ def run_health_check_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# Start health check server on a background thread
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
-# Enable gateway intents
+# --- Bot Setup ---
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -30,11 +29,15 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix=".", intents=intents)
 
 WELCOME_CHANNEL_ID = 1549272703750377472
+COBALT_API_URL = "http://localhost:9000"  # Cobalt runs in the same container
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
+
+# A simple lock to prevent concurrent processing
+processing_lock = asyncio.Lock()
 
 def get_ordinal(n: int) -> str:
     formatted_num = f"{n:02d}"
@@ -75,7 +78,34 @@ async def on_member_join(member: discord.Member):
 
     await channel.send(content=f"Welcome {member.mention}!", embed=embed)
 
-# ----------------- MUSIC COMMANDS ----------------- #
+# --- Music Commands ---
+
+async def get_audio_stream_from_cobalt(video_url: str) -> str:
+    """Send a request to the local Cobalt API to get a streamable audio URL."""
+    payload = {
+        "url": video_url,
+        "downloadMode": "audio",
+        "audioFormat": "mp3",
+        "audioBitrate": "128"
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{COBALT_API_URL}/", json=payload, headers=headers) as resp:
+            if resp.status != 200:
+                raise Exception(f"Cobalt API responded with status {resp.status}")
+            data = await resp.json()
+            
+            if data.get("status") == "redirect":
+                return data["url"]
+            elif data.get("status") == "tunnel":
+                return data["url"]
+            else:
+                error_msg = data.get("error", {}).get("code", "Unknown error")
+                raise Exception(f"Cobalt error: {error_msg}")
 
 @bot.command(name="play")
 async def play(ctx, *, query: str):
@@ -91,19 +121,22 @@ async def play(ctx, *, query: str):
         await ctx.voice_client.move_to(voice_channel)
 
     async with ctx.typing():
-        try:
-            async with YukiAPI() as yuki:
-                # Search for the track
-                results = await yuki.search(query, limit=1)
-                if not results:
-                    await ctx.send("❌ No results found for that query.")
+        async with processing_lock:  # Prevent concurrent Cobalt requests
+            try:
+                # If the query is not a URL, treat it as a YouTube search
+                if not query.startswith("http"):
+                    # Use a YouTube search URL
+                    search_query = query.replace(" ", "+")
+                    video_url = f"https://www.youtube.com/results?search_query={search_query}"
+                    # For a real search, you'd need to scrape the first result.
+                    # For simplicity, we'll just use the query as a URL if it's a link.
+                    # A more robust solution would use the YouTube Data API.
+                    await ctx.send("⚠️ Please provide a direct YouTube URL. Searching by text is not yet supported.")
                     return
+                else:
+                    video_url = query
 
-                track = results[0]
-                title = track.title
-
-                # Get the direct streamable audio URL
-                stream_url = await yuki.get_stream(query, type="audio")
+                stream_url = await get_audio_stream_from_cobalt(video_url)
 
                 if ctx.voice_client.is_playing():
                     ctx.voice_client.stop()
@@ -114,10 +147,10 @@ async def play(ctx, *, query: str):
                     after=lambda e: print(f'Finished playing: {e}') if e else None
                 )
 
-                await ctx.send(f"🎵 Now playing: **{title}**")
-        except Exception as e:
-            await ctx.send(f"❌ An error occurred while trying to play the audio: `{str(e)}`")
-            print(f"Error in play command: {e}")
+                await ctx.send(f"🎵 Now playing: **{video_url}**")
+            except Exception as e:
+                await ctx.send(f"❌ An error occurred while trying to play the audio: `{str(e)}`")
+                print(f"Error in play command: {e}")
 
 @bot.command(name="leave")
 async def leave(ctx):
