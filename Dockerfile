@@ -1,16 +1,9 @@
 FROM python:3.11-slim
 
-# Install system dependencies (FFmpeg for audio, curl/unzip for Deno)
+# Install FFmpeg (required for audio streaming)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    curl \
-    unzip \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Deno (Required by yt-dlp to decrypt YouTube streams)
-ENV DENO_INSTALL="/root/.deno"
-ENV PATH="$DENO_INSTALL/bin:$PATH"
-RUN curl -fsSL https://deno.land/install.sh | sh
 
 # Set working directory
 WORKDIR /app
