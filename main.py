@@ -6,7 +6,7 @@ import discord
 from discord.ext import commands
 import yt_dlp
 
-# Dummy web server to satisfy Koyeb port 8000 health check
+# Dummy web server to satisfy Koyeb port health check
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -14,13 +14,12 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
 def run_health_check_server():
-    server = HTTPServer(('0.0.0.0', 8000), HealthCheckHandler)
+    port = int(os.getenv("PORT", 8000))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
 # Start health check server on a background thread
 threading.Thread(target=run_health_check_server, daemon=True).start()
-
-# ... rest of your main.py code below ...
 
 # Enable gateway intents
 intents = discord.Intents.default()
@@ -32,12 +31,23 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 
 WELCOME_CHANNEL_ID = 1549272703750377472
 
-# yt-dlp configuration
+# --- UPDATED YT-DLP CONFIGURATION ---
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
     'quiet': True,
     'default_search': 'auto',
+    # Use cookies to bypass YouTube bot detection
+    'cookiefile': 'cookies.txt',
+    # Use Deno to solve JavaScript challenges
+    'js_runtime': 'deno',
+    # Mimic a mobile client to avoid web restrictions
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web'],
+            'skip': ['webpage']
+        }
+    },
 }
 
 FFMPEG_OPTIONS = {
@@ -58,6 +68,8 @@ def get_ordinal(n: int) -> str:
 @bot.event
 async def on_ready():
     print(f"⚡ Bot is online as {bot.user.name}")
+    if not os.path.exists('cookies.txt'):
+        print("⚠️ WARNING: cookies.txt not found! YouTube may block requests.")
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -102,22 +114,26 @@ async def play(ctx, url: str):
         await ctx.voice_client.move_to(voice_channel)
 
     async with ctx.typing():
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
-        
-        if 'entries' in data:
-            data = data['entries'][0]
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+            
+            if 'entries' in data:
+                data = data['entries'][0]
 
-        stream_url = data['url']
-        title = data.get('title', 'Audio Track')
+            stream_url = data['url']
+            title = data.get('title', 'Audio Track')
 
-        if ctx.voice_client.is_playing():
-            ctx.voice_client.stop()
+            if ctx.voice_client.is_playing():
+                ctx.voice_client.stop()
 
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
-        ctx.voice_client.play(source, after=lambda e: print(f'Finished playing: {e}') if e else None)
+            source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+            ctx.voice_client.play(source, after=lambda e: print(f'Finished playing: {e}') if e else None)
 
-    await ctx.send(f"🎵 Now playing: **{title}**")
+            await ctx.send(f"🎵 Now playing: **{title}**")
+        except Exception as e:
+            await ctx.send(f"❌ An error occurred while trying to play the audio: `{str(e)}`")
+            print(f"Error in play command: {e}")
 
 @bot.command(name="leave")
 async def leave(ctx):
@@ -128,4 +144,7 @@ async def leave(ctx):
         await ctx.send("❌ I am not connected to a voice channel.")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-bot.run(TOKEN)
+if not TOKEN:
+    print("❌ ERROR: DISCORD_TOKEN environment variable is missing!")
+else:
+    bot.run(TOKEN)
